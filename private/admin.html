@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en-ZA"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LiboTech Store Management</title><link rel="stylesheet" href="/style.css"><script src="/admin/dashboard.js" defer></script></head>
+<body><main class="admin-page">
+<p><a href="/">← Storefront</a></p><h1>LiboTech Store Management</h1><p id="admin-status" role="status"></p>
+<section><h2>Client subscriptions</h2><div id="stores"></div></section>
+<section><h2>Store settings</h2>
+<form class="fields" id="store">
+<label>Store slug<input name="slug" pattern="[a-z0-9][a-z0-9-]{0,39}" required></label>
+<label>Store name<input name="name" required></label>
+<label>Owner email and SaaS billing email<input name="email" type="email" required></label>
+<label>Owner WhatsApp number<input name="whatsapp" type="tel" placeholder="+27…" required></label>
+<label>Delivery fee in rand<input name="shipping" type="number" min="0" step=".01" value="0" required></label>
+<label>Store Paystack secret key<input name="payment_key" type="password" autocomplete="off" placeholder="Leave blank to keep existing key"></label>
+<label><span><input type="checkbox" name="enabled" checked> Enable storefront when subscription is paid</span></label>
+<button class="add">Save store</button>
+</form></section>
+<section><h2>Products</h2><div id="products"></div>
+<form class="fields" id="product">
+<label>Store slug<input name="store_slug" value="nocturne" required></label>
+<label>Product SKU<input name="sku" required></label>
+<label>Product name<input name="name" required></label>
+<label>Size<input name="size" required></label>
+<label>Description<textarea name="notes" required></textarea></label>
+<label>Price in rand<input name="price" type="number" min=".01" step=".01" required></label>
+<label>Image position in shared product image (%)<input name="image_position" type="number" min="0" max="100" value="50" required></label>
+<label><span><input type="checkbox" name="active" checked> Visible on storefront</span></label>
+<button class="add">Save product</button>
+</form></section>
+<section><h2>Paid orders</h2><div id="orders"></div></section>
+<section><h2>Contact enquiries</h2><div id="contacts"></div></section>
+<section><h2>Notification delivery issues</h2><div id="notifications"></div></section>
+</main></body></html>

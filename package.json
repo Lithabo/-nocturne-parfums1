@@ -1,0 +1,21 @@
+{
+  "name": "nocturne-commerce",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "db:setup": "node --env-file-if-exists=.env setup.js",
+    "check": "node --check server.js && node --check setup.js && node --check db.js && node --check notifications.js && node --check public/shop.js && node --check public/contact.js && node --check private/dashboard.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "pdfkit": "^0.17.2",
+    "pg": "^8.16.3",
+    "zod": "^4.1.0"
+  }
+}
