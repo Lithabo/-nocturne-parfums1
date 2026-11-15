@@ -78,3 +78,64 @@ test('Customer receives a PDF invoice after payment', async () => {
     else process.env.MAIL_FROM = originalFrom;
   }
 });
+
+test('Resend failure is reported correctly', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.RESEND_API_KEY;
+  const originalFrom = process.env.MAIL_FROM;
+
+  try {
+    process.env.RESEND_API_KEY = 'test-api-key';
+    process.env.MAIL_FROM = 'onboarding@resend.dev';
+
+    // Simulate Resend rejecting the email.
+    globalThis.fetch = async () => ({
+      ok: false,
+      status: 503
+    });
+
+    const store = {
+      name: 'Nocturne Parfums',
+      email: 'owner@example.com'
+    };
+
+    const order = {
+      ref: 'TEST-FAIL-001',
+      customer: {
+        name: 'Test Customer',
+        email: 'customer@example.com',
+        address: 'Test Street',
+        city: 'Durban',
+        province: 'KwaZulu-Natal',
+        postcode: '4000'
+      },
+      items: [
+        {
+          name: 'The Blue Hour',
+          quantity: 1,
+          price_cents: 150000
+        }
+      ],
+      shipping_cents: 10000,
+      amount: 160000,
+      paid_at: new Date().toISOString()
+    };
+
+    await assert.rejects(
+      sendEmail(
+        { id: 1000, kind: 'customer_invoice_email' },
+        store,
+        order
+      ),
+      /Resend HTTP 503/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+
+    if (originalKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = originalKey;
+
+    if (originalFrom === undefined) delete process.env.MAIL_FROM;
+    else process.env.MAIL_FROM = originalFrom;
+  }
+});
