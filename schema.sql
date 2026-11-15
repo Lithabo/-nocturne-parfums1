@@ -54,11 +54,14 @@ CREATE TABLE IF NOT EXISTS billing_receipts (
 CREATE TABLE IF NOT EXISTS notifications (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   store_slug text NOT NULL REFERENCES stores(slug),
-  kind text NOT NULL CHECK (kind IN ('order_email','order_whatsapp','contact_email','contact_whatsapp')),
+  kind text NOT NULL CHECK (kind IN ('order_email','order_whatsapp','contact_email','contact_whatsapp','customer_invoice_email')),
   subject_id uuid NOT NULL,
   attempts integer NOT NULL DEFAULT 0,
   next_attempt timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz,
   last_error text,
+  claim_token uuid,
+  claimed_at timestamptz,
+  claimed_until timestamptz,
   UNIQUE (kind, subject_id)
 );

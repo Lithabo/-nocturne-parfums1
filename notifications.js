@@ -1,10 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import PDFDocument from 'pdfkit';
-import { transaction } from './db.js';
-
+import { pool, transaction } from './db.js';
 const env = process.env;
 export const rand = cents => 'R '+(cents/100).toFixed(2);
 
-async function invoice(store, order) {
+export async function invoice(store, order) {
   const pdf = new PDFDocument({margin:50,size:'A4'});
   const chunks = [];
   const result = new Promise((resolve,reject) => {
@@ -25,11 +25,12 @@ async function invoice(store, order) {
   return result;
 }
 
-async function sendEmail(job,store,record) {
+export async function sendEmail(job,store,record) {
   if (!env.RESEND_API_KEY || !env.MAIL_FROM || !store.email) throw new Error('Email configuration missing');
-  const order = job.kind === 'order_email';
+const customerInvoice = job.kind === 'customer_invoice_email';
+const order = job.kind === 'order_email' || customerInvoice;
   const payload = {
-    from:env.MAIL_FROM,to:[store.email],
+    from:env.MAIL_FROM,to:[customerInvoice ? record.customer.email : store.email],
     subject:order?'Paid invoice '+record.ref:'New enquiry for '+store.name,
     text:order?'Payment received for '+rand(record.amount)+'. The invoice is attached.':
       record.details.name+' <'+record.details.email+'>\n\n'+record.details.message
@@ -60,19 +61,57 @@ async function sendWhatsApp(job,store,record) {
   if (!response.ok) throw new Error('Twilio HTTP '+response.status);
   await response.body?.cancel();
 }
+export async function claimNextNotification(
+  runTransaction = transaction
+) {
+  const claimToken = randomUUID();
 
-async function deliverNext() {
-  return transaction(async db => {
+  return runTransaction(async (db) => {
+    const { rows: [job] } = await db.query(`
+      SELECT id
+      FROM notifications
+      WHERE sent_at IS NULL
+        AND attempts < 8
+        AND next_attempt <= now()
+        AND (claimed_until IS NULL OR claimed_until <= now())
+      ORDER BY next_attempt, id
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    `);
+
+    if (!job) return null;
+
+    const { rows: [claimed] } = await db.query(`
+      UPDATE notifications
+      SET claim_token = $2,
+          claimed_at = now(),
+          claimed_until = now() + interval '2 minutes'
+      WHERE id = $1
+      RETURNING *
+    `, [job.id, claimToken]);
+
+    return claimed;
+  });
+}
+export async function deliverNext(
+  runTransaction = transaction,
+  deliverEmail = sendEmail,
+  deliverWhatsApp = sendWhatsApp
+) {
+  return runTransaction(async db => {
     const {rows:[job]} = await db.query(`SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<8
       AND next_attempt<=now() ORDER BY next_attempt,id LIMIT 1 FOR UPDATE SKIP LOCKED`);
     if (!job) return false;
     try {
       const {rows:[store]} = await db.query('SELECT name,email,whatsapp FROM stores WHERE slug=$1',[job.store_slug]);
-      const query = job.kind.startsWith('order_')
+      const query = (job.kind.startsWith('order_') || job.kind === 'customer_invoice_email')
         ? 'SELECT * FROM purchases WHERE ref=$1 AND store_slug=$2' : 'SELECT * FROM contacts WHERE id=$1 AND store_slug=$2';
       const {rows:[record]} = await db.query(query,[job.subject_id,job.store_slug]);
-      if (job.kind.endsWith('_email')) await sendEmail(job,store,record);
-      else await sendWhatsApp(job,store,record);
+          if (job.kind.endsWith('_email')) {
+        await deliverEmail(job, store, record);
+      } else {
+        await deliverWhatsApp(job, store, record);
+      }
       await db.query('UPDATE notifications SET sent_at=now(),last_error=NULL WHERE id=$1',[job.id]);
     } catch (error) {
       const detail = /^(Email configuration|WhatsApp configuration|Resend HTTP|Twilio HTTP)/.test(error.message)
@@ -83,7 +122,113 @@ async function deliverNext() {
     return true;
   });
 }
+export async function loadNotificationDetails(job) {
+  const { pool } = await import('./db.js');
 
+  const { rows: [store] } = await pool.query(
+    'SELECT name, email, whatsapp FROM stores WHERE slug = $1',
+    [job.store_slug]
+  );
+
+  if (!store) {
+    throw new Error('Store not found');
+  }
+
+  const isOrder =
+    job.kind.startsWith('order_') ||
+    job.kind === 'customer_invoice_email';
+
+  const query = isOrder
+    ? 'SELECT * FROM purchases WHERE ref = $1 AND store_slug = $2'
+    : 'SELECT * FROM contacts WHERE id = $1 AND store_slug = $2';
+
+  const { rows: [record] } = await pool.query(query, [
+    job.subject_id,
+    job.store_slug
+  ]);
+
+  if (!record) {
+    throw new Error('Notification record not found');
+  }
+
+  return { store, record };
+}
+export async function markNotificationSent(
+  job,
+  runQuery = (...args) => pool.query(...args)
+) {
+const result = await runQuery(`
+    UPDATE notifications
+    SET sent_at = now(),
+        last_error = NULL,
+        claim_token = NULL,
+        claimed_at = NULL,
+        claimed_until = NULL
+    WHERE id = $1
+      AND claim_token = $2
+      AND sent_at IS NULL
+    RETURNING id
+  `, [job.id, job.claim_token]);
+
+  return result.rowCount === 1;
+}
+export async function markNotificationFailed(
+  job,
+  error,
+  runQuery = (...args) => pool.query(...args)
+) {
+
+  const message = String(error?.message || 'Unknown error');
+
+  const safeMessage =
+    /^(Email configuration|WhatsApp configuration|Resend HTTP|Twilio HTTP)/.test(message)
+      ? message
+      : 'Delivery failed. Check provider configuration and logs.';
+
+  const result = await runQuery(`
+    UPDATE notifications
+    SET attempts = attempts + 1,
+        last_error = $3,
+        next_attempt = now() + interval '1 minute' * power(2, attempts),
+        claim_token = NULL,
+        claimed_at = NULL,
+        claimed_until = NULL
+    WHERE id = $1
+      AND claim_token = $2
+      AND sent_at IS NULL
+    RETURNING id
+  `, [job.id, job.claim_token, safeMessage]);
+
+  return result.rowCount === 1;
+}
+export async function deliverClaimedNotification() {
+  const job = await claimNextNotification();
+
+  if (!job) return false;
+
+  try {
+    const { store, record } = await loadNotificationDetails(job);
+
+    if (job.kind.endsWith('_email')) {
+      await sendEmail(job, store, record);
+    } else {
+      await sendWhatsApp(job, store, record);
+    }
+
+    const marked = await markNotificationSent(job);
+
+    if (!marked) {
+      console.error(
+        'Notification delivery was attempted, but the claim was lost:',
+        job.id
+      );
+    }
+  } catch (error) {
+    await markNotificationFailed(job, error);
+  }
+
+  return true;
+}
 export function startNotifications() {
   async function run() {
     try {

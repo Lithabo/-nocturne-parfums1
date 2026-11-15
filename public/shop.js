@@ -40,20 +40,102 @@ async function checkPayment() {
     status.textContent = 'Payment confirmed. Thank you for your order. Reference: '+ref;
     params.delete('payment');
     history.replaceState(null,'',location.pathname+(params.size?'?'+params:''));
-  } catch {}
+      } catch {}
 }
+
 void checkPayment();
+
 function showBag() {
   const items = products.filter(qty);
   const subtotal = items.reduce((sum,item) => sum+item.price_cents*qty(item),0);
-  content.innerHTML = '<h2 id="dialog-title">Your bag</h2>' + (items.length ? items.map(item =>
-    `<div class="line"><span>${text(item.name)}<br>${format(item.price_cents)}</span><div>
-    <button class="qty" data-sku="${item.sku}" data-change="-1" aria-label="Remove one ${text(item.name)}">−</button> ${qty(item)}
-    <button class="qty" data-sku="${item.sku}" data-change="1" aria-label="Add one ${text(item.name)}">+</button></div></div>`
-  ).join('') + `<p>Subtotal ${format(subtotal)} · Delivery ${format(shipping)}</p>
-  <p><strong>Total ${format(subtotal+shipping)}</strong></p><button class="add" id="checkout">Checkout</button>` : '<p>Your bag is empty.</p>');
+
+  content.innerHTML = '<h2 id="dialog-title">Your bag</h2>' +
+    (items.length ? items.map(item =>
+      `<div class="line">
+        <span>${text(item.name)}<br>${format(item.price_cents)}</span>
+        <div>
+          <button class="qty" data-sku="${item.sku}" data-change="-1">−</button>
+          ${qty(item)}
+          <button class="qty" data-sku="${item.sku}" data-change="1">+</button>
+        </div>
+      </div>`
+    ).join('') +
+    `<p>Subtotal ${format(subtotal)} · Delivery ${format(shipping)}</p>
+     <p><strong>Total ${format(subtotal+shipping)}</strong></p>
+     <button class="add" id="checkout">Checkout</button>`
+    : '<p>Your bag is empty.</p>');
+
   if (!drawer.open) drawer.showModal();
 }
+
+/* Smooth shopping bag opening and closing */
+
+function openDrawerSmoothly() {
+  if (drawer.open) return;
+
+  drawer.classList.remove("is-closing");
+  drawer.showModal();
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    drawer.classList.add("is-visible");
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (drawer.open) {
+        drawer.classList.add("is-visible");
+      }
+    });
+  });
+}
+
+function closeDrawerSmoothly() {
+  if (!drawer.open || drawer.classList.contains("is-closing")) {
+    return;
+  }
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    drawer.close();
+    drawer.classList.remove("is-visible");
+    return;
+  }
+
+  drawer.classList.add("is-closing");
+  drawer.classList.remove("is-visible");
+
+  let completed = false;
+
+  function finishClose() {
+    if (completed) return;
+    completed = true;
+
+    drawer.removeEventListener("transitionend", handleTransitionEnd);
+
+    if (drawer.open) drawer.close();
+
+    drawer.classList.remove("is-closing");
+  }
+
+  function handleTransitionEnd(event) {
+    if (
+      event.target === drawer &&
+      event.propertyName === "transform"
+    ) {
+      finishClose();
+    }
+  }
+
+  drawer.addEventListener("transitionend", handleTransitionEnd);
+
+  setTimeout(finishClose, 750);
+}
+drawer.addEventListener("cancel", event => {
+  event.preventDefault();
+  closeDrawerSmoothly();
+});
+
+
 function showCheckout() {
   content.innerHTML = `<h2 id="dialog-title">Delivery details</h2><form class="fields" id="checkout-form">
   <label>Name<input name="name" required maxlength="120" autocomplete="name"></label>
@@ -88,7 +170,7 @@ function showCheckout() {
 function showProduct(item) {
   content.innerHTML = `<h2 id="dialog-title">${text(item.name)}</h2><p>${text(item.notes)}</p>
     <p>${text(item.size)} · ${format(item.price_cents)}</p><button class="add" data-sku="${item.sku}" data-change="1">Add to bag</button>`;
-  if (!drawer.open) drawer.showModal();
+ openDrawerSmoothly();
 }
 document.addEventListener('click',event => {
   const button = event.target.closest('button');
