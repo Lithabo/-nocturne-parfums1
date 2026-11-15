@@ -214,3 +214,112 @@ test('Failed email is scheduled for automatic retry', async () => {
 
   assert.equal(markedSent, false);
 });
+
+test('Successful email is marked as sent', async () => {
+  const queries = [];
+
+  const job = {
+    id: 102,
+    kind: 'customer_invoice_email',
+    store_slug: 'nocturne',
+    subject_id: 'TEST-ORDER-102',
+    attempts: 0
+  };
+
+  const mockDb = {
+    async query(sql, params = []) {
+      queries.push({ sql, params });
+
+      if (sql.includes('SELECT * FROM notifications')) {
+        return { rows: [job] };
+      }
+
+      if (sql.includes('SELECT name,email,whatsapp FROM stores')) {
+        return {
+          rows: [{
+            name: 'Nocturne Parfums',
+            email: 'owner@example.com'
+          }]
+        };
+      }
+
+      if (sql.includes('SELECT * FROM purchases')) {
+        return {
+          rows: [{
+            ref: 'TEST-ORDER-102',
+            customer: { email: 'customer@example.com' }
+          }]
+        };
+      }
+
+      if (sql.includes('UPDATE notifications')) {
+        return { rowCount: 1, rows: [] };
+      }
+
+      throw new Error('Unexpected database query: ' + sql);
+    }
+  };
+
+  const mockTransaction = async callback => callback(mockDb);
+
+  let emailsSent = 0;
+
+  const successfulEmail = async () => {
+    emailsSent++;
+  };
+
+  const result = await deliverNext(
+    mockTransaction,
+    successfulEmail
+  );
+
+  assert.equal(result, true);
+  assert.equal(emailsSent, 1);
+
+  const markedSent = queries.find(
+    entry => entry.sql.includes('SET sent_at=now()')
+  );
+
+  assert.ok(markedSent, 'Notification should be marked as sent');
+  assert.equal(markedSent.params[0], 102);
+
+  const retryScheduled = queries.some(
+    entry => entry.sql.includes('attempts=attempts+1')
+  );
+
+  assert.equal(retryScheduled, false);
+});
+
+test('Notifications stop retrying after eight failed attempts', async () => {
+  const queries = [];
+
+  const mockDb = {
+    async query(sql, params = []) {
+      queries.push({ sql, params });
+
+      if (sql.includes('SELECT * FROM notifications')) {
+        assert.match(sql, /attempts\s*<\s*8/);
+        return { rows: [] };
+      }
+
+      throw new Error('Unexpected database query: ' + sql);
+    }
+  };
+
+  const mockTransaction = async callback => callback(mockDb);
+
+  let emailsSent = 0;
+
+  const mockEmail = async () => {
+    emailsSent++;
+  };
+
+  const result = await deliverNext(
+    mockTransaction,
+    mockEmail
+  );
+
+  assert.equal(result, false);
+  assert.equal(emailsSent, 0);
+  assert.equal(queries.length, 1);
+});
