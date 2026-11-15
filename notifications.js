@@ -62,8 +62,12 @@ async function sendWhatsApp(job,store,record) {
   await response.body?.cancel();
 }
 
-async function deliverNext() {
-  return transaction(async db => {
+export async function deliverNext(
+  runTransaction = transaction,
+  deliverEmail = sendEmail,
+  deliverWhatsApp = sendWhatsApp
+) {
+  return runTransaction(async db => {
     const {rows:[job]} = await db.query(`SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<8
       AND next_attempt<=now() ORDER BY next_attempt,id LIMIT 1 FOR UPDATE SKIP LOCKED`);
     if (!job) return false;
@@ -72,8 +76,11 @@ async function deliverNext() {
       const query = (job.kind.startsWith('order_') || job.kind === 'customer_invoice_email')
         ? 'SELECT * FROM purchases WHERE ref=$1 AND store_slug=$2' : 'SELECT * FROM contacts WHERE id=$1 AND store_slug=$2';
       const {rows:[record]} = await db.query(query,[job.subject_id,job.store_slug]);
-      if (job.kind.endsWith('_email')) await sendEmail(job,store,record);
-      else await sendWhatsApp(job,store,record);
+          if (job.kind.endsWith('_email')) {
+        await deliverEmail(job, store, record);
+      } else {
+        await deliverWhatsApp(job, store, record);
+      }
       await db.query('UPDATE notifications SET sent_at=now(),last_error=NULL WHERE id=$1',[job.id]);
     } catch (error) {
       const detail = /^(Email configuration|WhatsApp configuration|Resend HTTP|Twilio HTTP)/.test(error.message)
