@@ -43,11 +43,18 @@ async function paystack(key, path, body) {
 const verify = (key, ref) => paystack(key,'/transaction/verify/'+encodeURIComponent(ref));
 const matches = (data,ref,amount) => data?.status === 'success' && data.reference === ref &&
   data.amount === amount && data.currency === 'ZAR' && data.channel === 'card';
+  async function notify(db, store, prefix, ref) {
+  const kinds = [`${prefix}_email`, `${prefix}_whatsapp`];
 
-async function notify(db, store, prefix, ref) {
-  for (const channel of ['email','whatsapp']) {
-    await db.query('INSERT INTO notifications(store_slug,kind,subject_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
-      [store,prefix+'_'+channel,ref]);
+  if (prefix === 'order') {
+    kinds.push('customer_invoice_email');
+  }
+
+  for (const kind of kinds) {
+    await db.query(
+      'INSERT INTO notifications(store_slug,kind,subject_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+      [store, kind, ref]
+    );
   }
 }
 

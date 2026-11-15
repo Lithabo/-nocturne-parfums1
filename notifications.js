@@ -4,7 +4,7 @@ import { transaction } from './db.js';
 const env = process.env;
 export const rand = cents => 'R '+(cents/100).toFixed(2);
 
-async function invoice(store, order) {
+export async function invoice(store, order) {
   const pdf = new PDFDocument({margin:50,size:'A4'});
   const chunks = [];
   const result = new Promise((resolve,reject) => {
@@ -27,9 +27,10 @@ async function invoice(store, order) {
 
 async function sendEmail(job,store,record) {
   if (!env.RESEND_API_KEY || !env.MAIL_FROM || !store.email) throw new Error('Email configuration missing');
-  const order = job.kind === 'order_email';
+const customerInvoice = job.kind === 'customer_invoice_email';
+const order = job.kind === 'order_email' || customerInvoice;
   const payload = {
-    from:env.MAIL_FROM,to:[store.email],
+    from:env.MAIL_FROM,to:[customerInvoice ? record.customer.email : store.email],
     subject:order?'Paid invoice '+record.ref:'New enquiry for '+store.name,
     text:order?'Payment received for '+rand(record.amount)+'. The invoice is attached.':
       record.details.name+' <'+record.details.email+'>\n\n'+record.details.message
@@ -68,7 +69,7 @@ async function deliverNext() {
     if (!job) return false;
     try {
       const {rows:[store]} = await db.query('SELECT name,email,whatsapp FROM stores WHERE slug=$1',[job.store_slug]);
-      const query = job.kind.startsWith('order_')
+      const query = (job.kind.startsWith('order_') || job.kind === 'customer_invoice_email')
         ? 'SELECT * FROM purchases WHERE ref=$1 AND store_slug=$2' : 'SELECT * FROM contacts WHERE id=$1 AND store_slug=$2';
       const {rows:[record]} = await db.query(query,[job.subject_id,job.store_slug]);
       if (job.kind.endsWith('_email')) await sendEmail(job,store,record);
