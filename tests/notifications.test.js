@@ -1,8 +1,52 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sendEmail, deliverNext } from '../notifications.js';
+import {
+  sendEmail,
+  deliverNext,
+  claimNextNotification,
+  markNotificationFailed,
+  markNotificationSent
+} from '../notifications.js';
+test('Failed notifications require the correct claim token', async () => {
+  const job = {
+    id: 42,
+    claim_token: 'test-claim-token'
+  };
 
+  let capturedSQL = '';
+  let capturedParams = [];
+
+  const mockQuery = async (sql, params) => {
+    capturedSQL = sql;
+    capturedParams = params;
+
+    // Simulate a notification whose claim belongs
+    // to a different worker.
+    return { rowCount: 0 };
+  };
+
+  const updated = await markNotificationFailed(
+    job,
+    new Error('Resend HTTP 503'),
+    mockQuery
+  );
+
+  assert.equal(updated, false);
+
+  assert.match(
+    capturedSQL,
+    /WHERE id = \$1\s+AND claim_token = \$2/i
+  );
+
+  assert.deepEqual(capturedParams, [
+    42,
+    'test-claim-token',
+    'Resend HTTP 503'
+  ]);
+
+  assert.match(capturedSQL, /attempts = attempts \+ 1/i);
+});
 test('Customer receives a PDF invoice after payment', async () => {
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.RESEND_API_KEY;
@@ -322,4 +366,131 @@ test('Notifications stop retrying after eight failed attempts', async () => {
   assert.equal(result, false);
   assert.equal(emailsSent, 0);
   assert.equal(queries.length, 1);
+});
+test('Notification job is claimed with a unique token', async () => {
+  const queries = [];
+
+  const mockTransaction = async (work) => {
+    const db = {
+      query: async (sql, params = []) => {
+        queries.push({ sql, params });
+
+        if (sql.includes('SELECT id')) {
+          return { rows: [{ id: 1 }] };
+        }
+
+        if (sql.includes('UPDATE notifications')) {
+          return {
+            rows: [{
+              id: 1,
+              claim_token: params[1],
+              kind: 'order_email'
+            }]
+          };
+        }
+
+        return { rows: [] };
+      }
+    };
+
+    return work(db);
+  };
+
+  const job = await claimNextNotification(mockTransaction);
+
+  assert.equal(job.id, 1);
+  assert.match(
+    job.claim_token,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  );
+
+  assert.ok(
+    queries.some(q => q.sql.includes('FOR UPDATE SKIP LOCKED'))
+  );
+
+  assert.ok(
+    queries.some(q => q.sql.includes('claimed_until'))
+  );
+});
+test('Expired notification claims can be recovered', async () => {
+  const queries = [];
+
+  const mockTransaction = async (work) => {
+    const db = {
+      query: async (sql, params = []) => {
+        queries.push({ sql, params });
+
+        if (sql.includes('SELECT id')) {
+          return { rows: [{ id: 42 }] };
+        }
+
+        if (sql.includes('UPDATE notifications')) {
+          return {
+            rows: [{
+              id: 42,
+              claim_token: params[1]
+            }]
+          };
+        }
+
+        return { rows: [] };
+      }
+    };
+
+    return work(db);
+  };
+
+  const job = await claimNextNotification(mockTransaction);
+
+  assert.equal(job.id, 42);
+
+  const selectQuery = queries.find(q =>
+    q.sql.includes('SELECT id')
+  );
+
+  assert.ok(selectQuery);
+
+  assert.match(
+    selectQuery.sql,
+    /claimed_until\s+IS\s+NULL\s+OR\s+claimed_until\s*<=\s*now\(\)/i
+  );
+
+  assert.match(
+    selectQuery.sql,
+    /FOR UPDATE SKIP LOCKED/i
+  );
+});
+test('Only the claim owner can mark a notification as sent', async () => {
+  const job = {
+    id: 42,
+    claim_token: 'test-claim-token'
+  };
+
+  let capturedSQL = '';
+  let capturedParams = [];
+
+  const mockQuery = async (sql, params) => {
+    capturedSQL = sql;
+    capturedParams = params;
+
+    // PostgreSQL rejected the update because
+    // the worker no longer owns the claim.
+    return { rowCount: 0 };
+  };
+
+  const updated = await markNotificationSent(job, mockQuery);
+
+  assert.equal(updated, false);
+
+  assert.match(
+    capturedSQL,
+    /WHERE id = \$1\s+AND claim_token = \$2/i
+  );
+
+  assert.deepEqual(capturedParams, [
+    42,
+    'test-claim-token'
+  ]);
+
+  assert.match(capturedSQL, /sent_at = now\(\)/i);
 });

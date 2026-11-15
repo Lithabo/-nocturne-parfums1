@@ -60,5 +60,8 @@ CREATE TABLE IF NOT EXISTS notifications (
   next_attempt timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz,
   last_error text,
+  claim_token uuid,
+  claimed_at timestamptz,
+  claimed_until timestamptz,
   UNIQUE (kind, subject_id)
 );
