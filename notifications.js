@@ -25,7 +25,7 @@ export async function invoice(store, order) {
   return result;
 }
 
-async function sendEmail(job,store,record) {
+export async function sendEmail(job,store,record) {
   if (!env.RESEND_API_KEY || !env.MAIL_FROM || !store.email) throw new Error('Email configuration missing');
 const customerInvoice = job.kind === 'customer_invoice_email';
 const order = job.kind === 'order_email' || customerInvoice;
